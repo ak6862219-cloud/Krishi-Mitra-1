@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Environment — NEVER commit real API keys
+.env
+
+# Model files — too large for git, use Git LFS or keep local
+model/*.h5
+model/*.tflite
+model/*.pb
+model/saved_model/
+
+# Misc
+.DS_Store
+*.log

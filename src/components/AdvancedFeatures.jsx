@@ -1,6 +1,48 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
+import useDiseaseScan from '../hooks/useDiseaseScan'
+import DiseaseResultCard from './DiseaseResultCard'
+import { useLanguage } from '../context/LanguageContext'
 
 const AdvancedFeatures = () => {
+  const { currentLanguage } = useLanguage()
+  const {
+    scan,
+    getFullAdvisory,
+    reset: resetScan,
+    result: scanResult,
+    loading: scanLoading,
+    error: scanError,
+    stage: scanStage,
+  } = useDiseaseScan();
+
+  const fileInputRef = useRef(null)
+
+  const extractBulletPoints = (text) => {
+    if (!text) return [];
+    const bullets = [];
+    const regex = /[-•*]\s+([A-Z][^\n]{10,80})/g;
+    let m;
+    while ((m = regex.exec(text)) !== null && bullets.length < 3) {
+      bullets.push(m[1].replace(/\*+/g, "").trim());
+    }
+    return bullets;
+  };
+
+  const extractImmediateAction = (text) => {
+    if (!text) return null;
+    const m = text.match(/(?:immediate(?:ly)?|action|treat|apply|spray)\s*[:\s]+([^\n.]{10,140}[.!]?)/i);
+    return m ? m[1].replace(/\*+/g, "").trim() : null;
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      alert("Please upload an image file");
+      return;
+    }
+    await scan(file);
+  }
   const [activeTab, setActiveTab] = useState('advisory')
   const [activeRegion, setActiveRegion] = useState('all')
 
@@ -32,9 +74,7 @@ const AdvancedFeatures = () => {
     alert("Showing market data for: " + region.name)
   }
 
-  const handleImageUpload = () => {
-    alert("In a real implementation, this would open a file selection dialog")
-  }
+
 
   const renderAdvisoryContent = () => (
     <div className="feature-content active">
@@ -156,24 +196,73 @@ const AdvancedFeatures = () => {
   const renderDiseaseContent = () => (
     <div className="feature-content active">
       <h3><i className="fas fa-camera"></i> Image-Based Crop Disease Detection</h3>
-      <div className="upload-area" onClick={handleImageUpload}>
-        <div className="upload-icon">
-          <i className="fas fa-cloud-upload-alt"></i>
+      
+      {!scanLoading && !scanResult && (
+        <div className="upload-area" onClick={() => fileInputRef.current?.click()}>
+          <div className="upload-icon">
+            <i className="fas fa-cloud-upload-alt"></i>
+          </div>
+          <p>Upload an image of your crop for instant disease detection</p>
+          <p className="small">Supported formats: JPG, PNG | Max size: 5MB</p>
+          <button className="btn btn-primary">Select Image</button>
         </div>
-        <p>Upload an image of your crop for instant disease detection</p>
-        <p className="small">Supported formats: JPG, PNG | Max size: 5MB</p>
-        <button className="btn btn-primary">Select Image</button>
-      </div>
+      )}
 
-      <div className="result-area">
-        <h4>Detection Results Will Appear Here</h4>
-        <p>After uploading an image, our AI system will analyze it and provide:</p>
-        <ul>
-          <li>Disease identification</li>
-          <li>Severity assessment</li>
-          <li>Treatment recommendations</li>
-          <li>Prevention strategies</li>
-        </ul>
+      {scanLoading && (
+        <div className="upload-area" style={{ opacity: 0.7 }}>
+          <div className="upload-icon">
+            <i className="fas fa-spinner fa-spin" style={{fontSize: "40px", color: "#16a34a"}}></i>
+          </div>
+          <p style={{ marginTop: '15px', fontWeight: 'bold' }}>Processing Image...</p>
+          <p className="small">{scanStage}</p>
+        </div>
+      )}
+
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        style={{ display: "none" }} 
+        accept="image/*" 
+        onChange={handleFileChange} 
+      />
+
+      <div className="result-area" style={{ marginTop: '20px' }}>
+        {scanError && (
+          <div style={{ color: '#dc2626', background: '#fef2f2', padding: '15px', border: '1px solid #fecaca', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+             <span>{scanError}</span>
+             <button onClick={resetScan} style={{ padding: '8px 16px', background: '#dc2626', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Try Again</button>
+          </div>
+        )}
+
+        {scanResult && !scanLoading && (
+          <DiseaseResultCard
+            parsed={{
+              diseaseName:     scanResult?.disease,
+              confidence:      scanResult?.confidence,
+              severity:        scanResult?.severity,
+              isHealthy:       scanResult?.is_healthy,
+              symptoms:        extractBulletPoints(scanResult?.advisory_detail),
+              immediateAction: extractImmediateAction(scanResult?.advisory_detail),
+              rawText:         scanResult?.advisory_detail,
+            }}
+            language={currentLanguage}
+            onGetAdvisory={() => getFullAdvisory("detailed")}
+            onScanAgain={resetScan}
+          />
+        )}
+        
+        {!scanResult && !scanLoading && !scanError && (
+          <>
+            <h4>Detection Results Will Appear Here</h4>
+            <p>After uploading an image, our AI system will analyze it and provide:</p>
+            <ul>
+              <li>Disease identification</li>
+              <li>Severity assessment</li>
+              <li>Treatment recommendations</li>
+              <li>Prevention strategies</li>
+            </ul>
+          </>
+        )}
       </div>
     </div>
   )

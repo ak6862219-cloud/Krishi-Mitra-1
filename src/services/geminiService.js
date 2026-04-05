@@ -1,10 +1,10 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // Gemini AI service for agricultural chatbot
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+const GEMINI_API_KEY = import.meta.env.VITE_API_KEY;
 
 if (!GEMINI_API_KEY) {
-  console.error("VITE_GEMINI_API_KEY is not set in environment variables");
+  console.error("VITE_API_KEY is not set in environment variables");
 }
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
@@ -12,7 +12,8 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 export const geminiService = {
   generateResponse: async (question, language = "en") => {
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const modelName = import.meta.env.VITE_WEATHER_API_KEY || "gemini-2.5-flash";
+      const model = genAI.getGenerativeModel({ model: modelName });
 
       const prompt = `You are an expert agricultural advisor for India, India. ALWAYS provide EXACTLY 4 key points. Answer in this EXACT format:
 
@@ -75,7 +76,8 @@ Please try again later for AI-powered responses.`,
 
   analyzeImage: async (imageBase64, language = "en") => {
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const modelName = import.meta.env.VITE_WEATHER_API_KEY || "gemini-1.5-flash";
+      const model = genAI.getGenerativeModel({ model: modelName });
 
       const prompt = `Analyze this image and respond in EXACT format with EXACTLY 4 points:
 

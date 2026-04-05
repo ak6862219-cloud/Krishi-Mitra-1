@@ -1,0 +1,175 @@
+/*
+ * layout-fixes.css
+ * ─────────────────────────────────────────────────────────────
+ * Import this in main.jsx AFTER index.css:
+ *   import './layout-fixes.css'
+ *
+ * Fixes:
+ *  1. Chat page fills full viewport width
+ *  2. Weather page fills full width
+ *  3. Market page fills full width
+ *  4. All pages have consistent top spacing
+ *  5. Mobile bottom nav doesn't cover content
+ *  6. Schemes page padding fix
+ * ─────────────────────────────────────────────────────────────
+ */
+
+/* ── 1. CHAT PAGE — remove the cramped centered card layout ── */
+.chat-page {
+  padding: 0 !important;
+  align-items: stretch !important;
+  min-height: calc(100vh - 120px) !important;
+}
+
+.chat-container {
+  max-width: 100% !important;
+  width: 100% !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  border-left: none !important;
+  border-right: none !important;
+  min-height: calc(100vh - 120px) !important;
+}
+
+/* On wider screens, keep it reasonably wide but not full */
+@media (min-width: 900px) {
+  .chat-page {
+    padding: 1.5rem !important;
+    align-items: flex-start !important;
+  }
+  .chat-container {
+    max-width: 860px !important;
+    margin: 0 auto !important;
+    border-radius: 1rem !important;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.08) !important;
+    border: 1px solid var(--border) !important;
+    min-height: calc(100vh - 180px) !important;
+  }
+}
+
+/* ── 2. WEATHER PAGE — full width on mobile ── */
+.weather-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 5rem;
+}
+
+.weather-page {
+  min-height: calc(100vh - 60px);
+}
+
+/* ── 3. MARKET PAGE — proper full width ── */
+.market-page {
+  padding: 1.5rem 0 5rem !important;
+}
+
+.market-page .container {
+  padding: 0 1rem !important;
+}
+
+@media (min-width: 768px) {
+  .market-page .container {
+    padding: 0 2rem !important;
+  }
+}
+
+/* ── 4. SCHEMES PAGE — full width ── */
+.schemes-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem 1rem 5rem !important;
+}
+
+/* ── 5. MOBILE BOTTOM NAV — add bottom padding to all pages ── */
+@media (max-width: 768px) {
+  main {
+    padding-bottom: 80px;
+  }
+
+  .chat-container {
+    min-height: calc(100vh - 160px) !important;
+  }
+
+  .chat-messages {
+    max-height: calc(100vh - 280px);
+    overflow-y: auto;
+  }
+}
+
+/* ── 6. DISEASE RESULT CARD — never exceed chat bubble width ── */
+.drc-wrap {
+  max-width: 100% !important;
+}
+
+/* ── 7. GENERAL PAGE WRAPPER — consistent top spacing ── */
+.weather-page,
+.market-page,
+.schemes-page,
+.profile-page,
+.login-page {
+  padding-top: 1.5rem;
+}
+
+/* ── 8. PROFILE PAGE ── */
+.profile-page {
+  min-height: calc(100vh - 60px);
+  padding: 1.5rem 1rem 5rem;
+}
+
+/* ── 9. LOGIN PAGE — center vertically ── */
+.login-page {
+  min-height: calc(100vh - 120px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+}
+
+/* ── 10. PAGE PLACEHOLDER (Advisories/Contact fallback) ── */
+.page-placeholder {
+  max-width: 600px;
+  margin: 3rem auto;
+}
+
+/* ── 11. WEATHER CARDS responsive grid ── */
+.weather-current-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+@media (max-width: 640px) {
+  .weather-current-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ── 12. MESSAGE BUBBLE — disease card fits inside ── */
+.message-bubble {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.message.bot .message-content {
+  max-width: 90%;
+}
+
+/* ── 13. DiseaseResultCard inside chat — proper width ── */
+.message-bubble .drc-wrap {
+  max-width: 480px;
+}
+
+/* ── 14. MARKET PRICE CARDS — responsive ── */
+.price-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+@media (max-width: 640px) {
+  .price-cards {
+    grid-template-columns: 1fr;
+  }
+}

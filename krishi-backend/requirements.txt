@@ -1,0 +1,12 @@
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+python-dotenv==1.0.1
+python-multipart==0.0.9
+Pillow==10.3.0
+numpy==1.26.4
+google-generativeai==0.7.2
+pydantic==2.7.1
+
+# TensorFlow — comment out until your model is trained.
+# Use USE_MOCK_MODEL=true in .env in the meantime.
+tensorflow==2.16.1

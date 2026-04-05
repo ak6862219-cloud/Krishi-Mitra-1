@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMarketPrices } from "../hooks/useMarketPrices";
+import SkeletonLoader from "../components/SkeletonLoader";
 
 const MarketPricePage = () => {
   const [selectedRegion, setSelectedRegion] = useState("all");
@@ -48,10 +49,7 @@ const MarketPricePage = () => {
     return (
       <div className="market-page">
         <div className="container">
-          <div className="loading-state">
-            <div className="loading-spinner"></div>
-            <p>Loading market prices...</p>
-          </div>
+          <SkeletonLoader type="market" rows={5} />
         </div>
       </div>
     );

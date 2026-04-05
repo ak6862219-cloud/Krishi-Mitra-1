@@ -4,7 +4,7 @@
   height: auto;
   background: linear-gradient(135deg, var(--primary-50) 0%, var(--gray-50) 100%);
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* changed from center to flex-start to prevent clipping when taller than viewport */
   justify-content: center;
   padding: var(--space-4);
 }
@@ -13,15 +13,15 @@
   width: 100%;
   max-width: 800px;
   min-height: 70vh;
-  max-height: 90vh;
   height: auto;
   background: var(--surface-elevated);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-xl);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
   border: 1px solid var(--border);
+  margin-top: 2rem;
+  margin-bottom: 2rem;
 }
 
 /* Chat Header */
@@ -30,6 +30,8 @@
   color: white;
   padding: var(--space-6);
   border-bottom: 1px solid var(--primary-500);
+  border-top-left-radius: var(--radius-xl);
+  border-top-right-radius: var(--radius-xl);
 }
 
 .chat-header-content {
@@ -152,7 +154,6 @@
 /* Chat Messages */
 .chat-messages {
   flex: 1;
-  overflow-y: auto;
   padding: var(--space-6);
   display: flex;
   flex-direction: column;
@@ -177,7 +178,7 @@
   display: flex;
   align-items: flex-end;
   gap: var(--space-2);
-  max-width: 70%;
+  max-width: 85%;
 }
 
 .message.user .message-content {
@@ -291,6 +292,8 @@
   padding: var(--space-6);
   background: var(--surface-elevated);
   border-top: 1px solid var(--border);
+  border-bottom-left-radius: var(--radius-xl);
+  border-bottom-right-radius: var(--radius-xl);
 }
 
 .chat-input-wrapper {
@@ -625,7 +628,6 @@
   .chat-container {
     max-width: 90vw;
     min-height: 75vh;
-    max-height: 85vh;
   }
 }
 
@@ -638,10 +640,11 @@
   
   .chat-container {
     min-height: 80vh;
-    max-height: 95vh;
     height: auto;
     border-radius: var(--radius-lg);
     max-width: none;
+    margin-top: 1rem;
+    margin-bottom: 1rem;
   }
   
   .chat-header {
@@ -683,8 +686,9 @@
   
   .chat-container {
     min-height: 85vh;
-    max-height: 98vh;
     border-radius: var(--radius);
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
   }
   
   .chat-header-content {
@@ -747,8 +751,9 @@
   
   .chat-container {
     min-height: 90vh;
-    max-height: 100vh;
     border-radius: 0;
+    margin-top: 0;
+    margin-bottom: 0;
   }
   
   .chat-header {
@@ -773,7 +778,6 @@
   .chat-container {
     max-width: 900px;
     min-height: 65vh;
-    max-height: 80vh;
   }
 }
 
@@ -782,7 +786,6 @@
   .chat-container {
     max-width: 1000px;
     min-height: 60vh;
-    max-height: 75vh;
   }
 }
 

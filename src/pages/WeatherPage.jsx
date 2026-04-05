@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useWeather } from "../hooks/useWeather";
 import { weatherService } from "../services/weatherService";
+import SkeletonLoader from "../components/SkeletonLoader";
 
 const WeatherPage = () => {
   const [city, setCity] = useState("Thiruvananthapuram");
@@ -42,8 +43,7 @@ const WeatherPage = () => {
     return icons[condition?.toLowerCase()] || "⛅";
   };
 
-  if (loading)
-    return <div className="weather-loading">Loading weather data...</div>;
+  // Removed early return for loading state
 
   return (
     <div className="weather-page">
@@ -72,8 +72,15 @@ const WeatherPage = () => {
           </div>
         </div>
 
-        {/* Current Weather Cards */}
-        <div className="weather-current-grid">
+        {loading ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <SkeletonLoader type="weather" />
+            <SkeletonLoader type="hourly" />
+          </div>
+        ) : (
+          <>
+            {/* Current Weather Cards */}
+            <div className="weather-current-grid">
           <div className="weather-card current-temp">
             <div className="weather-card-label">Current Temp</div>
             <div className="weather-card-content">
@@ -256,6 +263,8 @@ const WeatherPage = () => {
               ))}
           </div>
         </div>
+        </>
+        )}
 
         {/* Footer */}
         <div className="weather-footer">
