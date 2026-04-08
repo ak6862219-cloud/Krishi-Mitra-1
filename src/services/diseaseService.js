@@ -11,7 +11,7 @@
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
-const USE_MOCK = true;
+const USE_MOCK = false;
 
 const MOCK_RESPONSE = {
   disease: "Leaf Scorch",

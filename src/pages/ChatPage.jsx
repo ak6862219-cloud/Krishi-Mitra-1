@@ -55,12 +55,26 @@ const ChatPage = () => {
     setInputText('')
     setIsLoading(true)
     try {
-      const response = await geminiService.generateResponse(inputText, currentLanguage)
+      const savedState = localStorage.getItem('km_state') || 'India';
+      const savedWeather = JSON.parse(localStorage.getItem('km_weather') || '{}');
+      const weatherSummary = savedWeather.temp
+        ? `${savedWeather.temp}°C, ${savedWeather.humidity}% humidity, ${savedWeather.condition}`
+        : '';
+
+      const response = await geminiService.generateResponse(inputText, currentLanguage, {
+        state: savedState,
+        weatherSummary
+      });
       const botMessage = { id:Date.now()+1, type:'bot', content:response.response, timestamp:new Date().toLocaleTimeString() }
       setMessages(prev => [...prev, botMessage])
       if (voiceEnabled && response.response) speakResponse(response.response)
-    } catch {
-      setMessages(prev => [...prev, { id:Date.now()+1, type:'bot', content:'Sorry, I encountered an error. Please try again.', timestamp:new Date().toLocaleTimeString(), isError:true }])
+    } catch (err) {
+      const errMsg = err.message?.includes('timed out')
+        ? 'The AI took too long to respond. Please try again.'
+        : err.message?.includes('503') || err.message?.includes('not configured')
+        ? 'AI service is not available right now. Please check the backend is running.'
+        : (err.message || 'Something went wrong. Please try again.');
+      setMessages(prev => [...prev, { id:Date.now()+1, type:'bot', content:errMsg, timestamp:new Date().toLocaleTimeString(), isError:true }])
     } finally {
       setIsLoading(false)
     }

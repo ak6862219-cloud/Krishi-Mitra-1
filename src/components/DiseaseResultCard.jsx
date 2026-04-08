@@ -192,6 +192,7 @@ export default function DiseaseResultCard({
   onScanAgain,
   language = "en",
   className = "",
+  immediateActions = [],
 }) {
   const [visible, setVisible] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -265,6 +266,16 @@ export default function DiseaseResultCard({
           colorScheme: "light",
         }}
       >
+        {/* ── Urgency Strip ── */}
+        <div style={{ height: 6, background: sev.color, width: "100%" }} />
+
+        {/* ── Low Confidence Banner ── */}
+        {data.confidence != null && data.confidence < 70 && (
+          <div style={{ padding: "8px 16px", background: "#fef08a", color: "#854d0e", fontSize: 13, fontWeight: 600, textAlign: "center" }}>
+            Low confidence — retake photo in better lighting
+          </div>
+        )}
+
         {/* ── Report header ── */}
         <div style={{
           display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -282,9 +293,6 @@ export default function DiseaseResultCard({
             {new Date().toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" })}
           </span>
         </div>
-
-        {/* ── Severity colour bar ── */}
-        <div style={{ height: 4, background: sev.color, width: "100%" }} />
 
         {/* ── Main body ── */}
         <div style={{ padding: "18px 20px 16px" }}>
@@ -324,7 +332,6 @@ export default function DiseaseResultCard({
             </div>
           </div>
 
-          {/* Severity meter */}
           <div style={{ marginBottom: 18 }}>
             <div style={{ height: 6, background: "#f3f4f6", borderRadius: 3, overflow: "hidden", marginBottom: 5 }}>
               <div
@@ -344,6 +351,18 @@ export default function DiseaseResultCard({
               <span style={{ color: SEV.high.color }}>Severe</span>
             </div>
           </div>
+
+          {/* ── Next 48 Hours Action ── */}
+          {immediateActions && immediateActions.length > 0 && (
+            <div style={{ marginBottom: 18, padding: "12px", background: "#f8fafc", borderRadius: 8, borderLeft: `4px solid ${sev.color}` }}>
+              <h3 style={{ fontSize: 13, fontWeight: 700, margin: "0 0 8px", color: "#1e293b" }}>Next 48 Hours Action</h3>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: "#334155", display: "flex", flexDirection: "column", gap: 4 }}>
+                {immediateActions.map((action, i) => (
+                  <li key={i}>{action}</li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {/* ── Advisory sections ── */}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -432,6 +451,33 @@ export default function DiseaseResultCard({
 
           {/* ── CTA buttons ── */}
           <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+            <button
+              onClick={() => {
+                if (navigator.share) {
+                  navigator.share({
+                    title: `Crop Health Report - ${data.diseaseName}`,
+                    text: `Disease Detected: ${data.diseaseName}\nSeverity: ${sev.label}\n\nAdvisory:\n${data.rawText}`
+                  }).catch(console.error);
+                } else {
+                  alert("Sharing not supported on this browser.");
+                }
+              }}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                gap: 6, padding: "11px 14px", borderRadius: 10,
+                background: "#f3f4f6", color: "#4b5563", fontSize: 13, fontWeight: 600,
+                border: "none", cursor: "pointer", fontFamily: "inherit"
+              }}
+              title="Share Advisory"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="18" cy="5" r="3"></circle>
+                <circle cx="6" cy="12" r="3"></circle>
+                <circle cx="18" cy="19" r="3"></circle>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+              </svg>
+            </button>
             {onGetAdvisory && (
               <button
                 onClick={onGetAdvisory}

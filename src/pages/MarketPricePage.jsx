@@ -2,48 +2,31 @@ import { useState } from "react";
 import { useMarketPrices } from "../hooks/useMarketPrices";
 import SkeletonLoader from "../components/SkeletonLoader";
 
+const ALL_STATES = [
+  "Andhra Pradesh","Assam","Bihar","Chhattisgarh","Gujarat","Haryana",
+  "Karnataka","Kerala","Madhya Pradesh","Maharashtra","Odisha",
+  "Punjab","Rajasthan","Tamil Nadu","Telangana","Uttar Pradesh",
+  "Uttarakhand","West Bengal"
+]
+
+const COMMODITIES = [
+  "Tomato","Onion","Potato","Rice","Wheat","Maize","Banana",
+  "Coconut","Cotton","Groundnut","Soyabean","Sugarcane","Paddy"
+]
+
 const MarketPricePage = () => {
-  const [selectedRegion, setSelectedRegion] = useState("all");
-  const [selectedCrop, setSelectedCrop] = useState("all");
-  const { prices, loading, error, lastUpdated } =
-    useMarketPrices(selectedRegion);
+  const [selectedState, setSelectedState] = useState("Maharashtra");
+  const [commodity, setCommodity] = useState("Tomato");
+  const { prices, loading, error, lastUpdated, source } =
+    useMarketPrices(selectedState, commodity);
 
-  const regions = [
-    { id: "all", name: "All Regions" },
-    { id: "thiruvananthapuram", name: "Thiruvananthapuram" },
-    { id: "ernakulam", name: "Ernakulam" },
-    { id: "thrissur", name: "Thrissur" },
-    { id: "kannur", name: "Kannur" },
-  ];
-
-  const getTrendIcon = (trend) => {
-    switch (trend) {
-      case "up":
-        return "📈";
-      case "down":
-        return "📉";
-      default:
-        return "➡️";
-    }
+  const getInsight = (min, max, modal) => {
+    if(!min || !max || !modal) return { text: 'Prices available', color: 'var(--blue-500)' };
+    const spread = ((max - min) / modal * 100).toFixed(0);
+    if (spread > 30) return { text: 'High price variation — compare mandis', color: 'var(--orange-500)' };
+    if (modal > (min + max) / 2) return { text: 'Prices trending upward', color: 'var(--green-500)' };
+    return { text: 'Stable market conditions', color: 'var(--blue-500)' };
   };
-
-  const getTrendColor = (trend) => {
-    switch (trend) {
-      case "up":
-        return "var(--primary-600)";
-      case "down":
-        return "var(--red-500)";
-      default:
-        return "var(--orange-500)";
-    }
-  };
-
-  const filteredPrices =
-    selectedCrop === "all"
-      ? prices
-      : prices.filter((item) =>
-          item.crop.toLowerCase().includes(selectedCrop.toLowerCase())
-        );
 
   if (loading) {
     return (
@@ -98,41 +81,40 @@ const MarketPricePage = () => {
         <div className="market-controls">
           <div className="controls-grid">
             <div className="filter-group">
-              <label htmlFor="region-select">
+              <label htmlFor="state-select">
                 <span className="label-icon">📍</span>
-                Region
+                State
               </label>
               <select
-                id="region-select"
-                value={selectedRegion}
-                onChange={(e) => setSelectedRegion(e.target.value)}
+                id="state-select"
+                value={selectedState}
+                onChange={(e) => setSelectedState(e.target.value)}
                 className="filter-select"
               >
-                {regions.map((region) => (
-                  <option key={region.id} value={region.id}>
-                    {region.name}
+                {ALL_STATES.map((st) => (
+                  <option key={st} value={st}>
+                    {st}
                   </option>
                 ))}
               </select>
             </div>
 
             <div className="filter-group">
-              <label htmlFor="crop-select">
+              <label htmlFor="commodity-select">
                 <span className="label-icon">🌱</span>
-                Crop
+                Commodity
               </label>
               <select
-                id="crop-select"
-                value={selectedCrop}
-                onChange={(e) => setSelectedCrop(e.target.value)}
+                id="commodity-select"
+                value={commodity}
+                onChange={(e) => setCommodity(e.target.value)}
                 className="filter-select"
               >
-                <option value="all">All Crops</option>
-                <option value="rice">Rice</option>
-                <option value="coconut">Coconut</option>
-                <option value="banana">Banana</option>
-                <option value="pepper">Black Pepper</option>
-                <option value="rubber">Rubber</option>
+                {COMMODITIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -150,17 +132,21 @@ const MarketPricePage = () => {
         {/* Results Summary */}
         <div className="results-summary">
           <p>
-            Showing <strong>{filteredPrices.length}</strong>{" "}
-            {filteredPrices.length === 1 ? "item" : "items"}
-            {selectedCrop !== "all" && ` for ${selectedCrop}`}
-            {selectedRegion !== "all" &&
-              ` in ${regions.find((r) => r.id === selectedRegion)?.name}`}
+            Showing <strong>{prices.length}</strong>{" "}
+            {prices.length === 1 ? "mandi" : "mandis"}
+            {commodity && ` for ${commodity}`}
+            {selectedState && ` in ${selectedState}`}
           </p>
+          {source && (
+            <p style={{marginTop: '4px', fontSize: '13px', color: 'var(--primary-600)'}}>
+              Data source: <strong>{source}</strong>
+            </p>
+          )}
         </div>
 
         {/* Price Cards Grid */}
         <div className="price-cards">
-          {filteredPrices.length === 0 ? (
+          {prices.length === 0 ? (
             <div className="no-results">
               <div className="no-results-icon">📊</div>
               <h3>No prices found</h3>
@@ -170,55 +156,51 @@ const MarketPricePage = () => {
               </p>
             </div>
           ) : (
-            filteredPrices.map((item, index) => (
-              <div key={index} className="price-card">
-                <div className="price-card-header">
-                  <div className="crop-info">
-                    <h3 className="crop-name">{item.crop}</h3>
-                    <p className="variety">Variety: {item.variety}</p>
+            prices.map((item, index) => {
+              const insight = getInsight(item.minPrice, item.maxPrice, item.modalPrice);
+              return (
+                <div key={index} className="price-card">
+                  <div className="price-card-header">
+                    <div className="crop-info">
+                      <h3 className="crop-name">{item.mandi}</h3>
+                      <p className="variety">{item.district} District | Variety: {item.variety}</p>
+                    </div>
+                    <div
+                      className="trend-indicator"
+                      style={{ color: insight.color, fontSize: '0.85em', textAlign: 'right', fontWeight: '500' }}
+                    >
+                      <span className="trend-text">{insight.text}</span>
+                    </div>
                   </div>
-                  <div
-                    className="trend-indicator"
-                    style={{ color: getTrendColor(item.trend) }}
-                  >
-                    <span className="trend-icon">
-                      {getTrendIcon(item.trend)}
+
+                  <div className="price-list">
+                    <div className="price-row">
+                      <span className="location">Minimum</span>
+                      <span className="price" style={{color: 'var(--text-secondary)'}}>₹{item.minPrice}/q</span>
+                    </div>
+                    <div className="price-row">
+                      <span className="location">Maximum</span>
+                      <span className="price" style={{color: 'var(--text-secondary)'}}>₹{item.maxPrice}/q</span>
+                    </div>
+                    <div className="price-row">
+                      <span className="location" style={{fontWeight: 'bold'}}>Modal (Average)</span>
+                      <span className="price" style={{fontWeight: 'bold'}}>₹{item.modalPrice}/q</span>
+                    </div>
+                  </div>
+
+                  <div className="card-footer">
+                    <span className="update-time">
+                      Arrival Date: {item.date}
                     </span>
-                    <span className="trend-text">{item.trend || "stable"}</span>
                   </div>
                 </div>
-
-                <div className="price-list">
-                  <div className="price-row">
-                    <span className="location">Thiruvananthapuram</span>
-                    <span className="price">₹{item.thiruvananthapuram}/kg</span>
-                  </div>
-                  <div className="price-row">
-                    <span className="location">Ernakulam</span>
-                    <span className="price">₹{item.ernakulam}/kg</span>
-                  </div>
-                  <div className="price-row">
-                    <span className="location">Thrissur</span>
-                    <span className="price">₹{item.thrissur}/kg</span>
-                  </div>
-                  <div className="price-row">
-                    <span className="location">Kannur</span>
-                    <span className="price">₹{item.kannur}/kg</span>
-                  </div>
-                </div>
-
-                <div className="card-footer">
-                  <span className="update-time">
-                    Updated: {item.lastUpdated || "Recently"}
-                  </span>
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
 
         {/* Market Insights */}
-        {filteredPrices.length > 0 && (
+        {prices.length > 0 && (
           <div className="market-insights">
             <h2>📈 Market Insights</h2>
             <div className="insights-grid">
