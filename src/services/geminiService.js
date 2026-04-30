@@ -1,23 +1,27 @@
 /**
  * geminiService.js
- * Routes ALL AI chat through the backend /api/chat endpoint.
- * No API keys in frontend.
+ * Calls the Krishi Mitra FastAPI backend /api/chat endpoint.
+ * The Gemini API key stays on the server — never exposed to the browser.
  */
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 export const geminiService = {
+  /**
+   * Send a question to the backend and get an AI response.
+   * Falls back gracefully if the backend is unreachable.
+   * @param {string} question
+   * @param {string} language  - "en" | "hi" | "ml"
+   * @param {object} context   - { state, weatherSummary, activeCrops }
+   * @returns {{ response: string, timestamp: string, isFallback: boolean }}
+   */
   generateResponse: async (question, language = "en", context = {}) => {
     const { state = "India", weatherSummary = "", activeCrops = "" } = context;
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
 
     try {
       const res = await fetch(`${API_URL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
         body: JSON.stringify({
           question,
           language,
@@ -28,22 +32,22 @@ export const geminiService = {
       });
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: "Server error" }));
-        throw new Error(err.detail || `HTTP ${res.status}`);
+        throw new Error(`Server error: ${res.status}`);
       }
 
       const data = await res.json();
       return {
-        response:  data.response,
-        timestamp: data.timestamp || new Date().toLocaleString(),
+        response:   data.response,
+        timestamp:  data.timestamp || new Date().toLocaleString(),
+        isFallback: data.fallback || false,
       };
     } catch (err) {
-      if (err.name === "AbortError") {
-        throw new Error("Request timed out. Please try again.");
-      }
-      throw err;
-    } finally {
-      clearTimeout(timeout);
+      console.error("geminiService error:", err);
+      return {
+        response:   "⚠️ Could not reach the AI server. Please ensure the backend is running on port 8000.",
+        timestamp:  new Date().toLocaleString(),
+        isFallback: true,
+      };
     }
   },
 };

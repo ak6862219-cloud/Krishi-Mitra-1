@@ -250,8 +250,16 @@
 }
 
 .error-text {
-  color: var(--red-500) !important;
+  color: #92400e !important;
 }
+
+/* Error bubble: soft amber, not alarming red */
+.message-bubble.error-bubble {
+  background: #fffbeb !important;
+  border-color: #fde68a !important;
+  color: #78350f;
+}
+
 
 /* Typing Indicator */
 .typing {

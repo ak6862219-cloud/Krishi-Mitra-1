@@ -13,16 +13,6 @@ const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 const USE_MOCK = false;
 
-const MOCK_RESPONSE = {
-  disease: "Leaf Scorch",
-  crop: "Tomato",
-  confidence: 92,
-  severity: "low",
-  is_healthy: false,
-  advisory_short: "Use neem spray and isolate affected plants",
-  advisory_detail: "Isolate affected plants. Avoid overhead watering. Apply neem-based fungicide weekly. Monitor spread."
-};
-
 // ─── Helper ───────────────────────────────────────────────────────────────────
 async function handleResponse(res) {
   if (!res.ok) {

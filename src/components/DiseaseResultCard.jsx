@@ -11,7 +11,7 @@ export function parseAdvisoryText(text) {
   const KEYS = [
     "DISEASE_SUMMARY", "SEVERITY", "VISIBLE_SYMPTOMS",
     "IMMEDIATE_ACTION_48H", "CHEMICAL_TREATMENT", "ORGANIC_ALTERNATIVE",
-    "PREVENTION_NEXT_SEASON", "CALL_OFFICER_IF", "FARMER_TIP",
+    "PREVENTION_NEXT_SEASON", "ECONOMIC_IMPACT", "CALL_OFFICER_IF", "FARMER_TIP",
   ];
 
   const sections = {};
@@ -27,15 +27,19 @@ export function parseAdvisoryText(text) {
 
   for (const raw of lines) {
     const line = raw.trim();
-    const matchedKey = KEYS.find(k => line.startsWith(k + ":") || line === k + ":");
+    const normalized = line.replace(/^[*\s]+|[*\s]+$/g, "");
+    const matchedKey = KEYS.find(
+      k => normalized.toUpperCase().startsWith(k + ":") || normalized.toUpperCase() === k + ":"
+    );
     if (matchedKey) {
       flush();
       currentKey = matchedKey;
       buffer = [];
-      const inline = line.slice(matchedKey.length + 1).trim();
+      const inline = normalized.slice(matchedKey.length + 1).trim().replace(/^\[|\]$/g, "");
       if (inline) buffer.push(inline);
     } else if (currentKey) {
-      buffer.push(raw);
+      const clean = raw.trim().replace(/^[*\s]+|[*\s]+$/g, "");
+      if (clean) buffer.push(clean);
     }
   }
   flush();
@@ -186,13 +190,17 @@ function BulletList({ items, color }) {
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 export default function DiseaseResultCard({
-  geminiResponse,   // raw advisory string (legacy)
-  parsed,           // pre-parsed object with { diseaseName, confidence, severity, sections, ... }
+  geminiResponse,       // raw advisory string (legacy)
+  parsed,               // pre-parsed object with { diseaseName, confidence, severity, sections, ... }
   onGetAdvisory,
   onScanAgain,
   language = "en",
   className = "",
   immediateActions = [],
+  economicImpact,       // string from backend ECONOMIC_IMPACT section
+  redAlertTriggered,    // boolean — true if severity == "high"
+  weatherAdvisory,      // string — contextual weather tip
+  mandiAdvisory,        // string — contextual mandi/market tip
 }) {
   const [visible, setVisible] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -220,21 +228,30 @@ export default function DiseaseResultCard({
           organic:"Organic alternative", prevention:"Prevention (next season)",
           callOfficer:"When to call officer", tip:"Farmer tip",
           advisory:"Full Advisory", again:"Scan Another",
-          showMore:"Show full report", showLess:"Hide report" },
+          showMore:"Show full report", showLess:"Hide report",
+          economicImpact:"Economic Impact",
+          redAlert:"RED ALERT: Expert call being initiated",
+          weatherAdvisory:"Weather Advisory", mandiIntel:"Mandi Price Intel" },
     hi: { detected:"पता चला", healthy:"स्वस्थ", report:"फसल स्वास्थ्य रिपोर्ट",
           severity:"गंभीरता", summary:"यह क्या है?", symptoms:"दिखाई देने वाले लक्षण",
           action:"48 घंटे में करें", chemical:"रासायनिक उपचार",
           organic:"जैविक विकल्प", prevention:"रोकथाम (अगला सीजन)",
           callOfficer:"अधिकारी को कब बुलाएं", tip:"किसान सुझाव",
           advisory:"पूरी सलाह", again:"फिर स्कैन करें",
-          showMore:"पूरी रिपोर्ट दिखाएं", showLess:"रिपोर्ट छुपाएं" },
+          showMore:"पूरी रिपोर्ट दिखाएं", showLess:"रिपोर्ट छुपाएं",
+          economicImpact:"आर्थिक प्रभाव",
+          redAlert:"रेड अलर्ट: विशेषज्ञ को कॉल किया जा रहा है",
+          weatherAdvisory:"मौसम सलाह", mandiIntel:"मंडी मूल्य जानकारी" },
     ml: { detected:"കണ്ടെത്തി", healthy:"ആരോഗ്യകരം", report:"വിള ആരോഗ്യ റിപ്പോർട്ട്",
           severity:"തീവ്രത", summary:"ഇത് എന്താണ്?", symptoms:"ദൃശ്യ ലക്ഷണങ്ങൾ",
           action:"48 മണിക്കൂറിനുള്ളിൽ", chemical:"രാസ ചികിത്സ",
           organic:"ജൈവ ബദൽ", prevention:"പ്രതിരോധം (അടുത്ത സീസൺ)",
           callOfficer:"ഓഫീസറെ വിളിക്കേണ്ടത്", tip:"കർഷക നിർദേശം",
           advisory:"പൂർണ ഉപദേശം", again:"വീണ്ടും സ്കാൻ",
-          showMore:"പൂർണ റിപ്പോർട്ട്", showLess:"റിപ്പോർട്ട് മറയ്ക്കുക" },
+          showMore:"പൂർണ റിപ്പോർട്ട്", showLess:"റിപ്പോർട്ട് മറയ്ക്കുക",
+          economicImpact:"സാമ്പത്തിക ആഘാതം",
+          redAlert:"റെഡ് അലർട്ട്: വിദഗ്ധനെ വിളിക്കുന്നു",
+          weatherAdvisory:"കാലാവസ്ഥ ഉപദേശം", mandiIntel:"മണ്ടി വില വിവരം" },
   };
   const T = L[language] ?? L.en;
 
@@ -268,6 +285,16 @@ export default function DiseaseResultCard({
       >
         {/* ── Urgency Strip ── */}
         <div style={{ height: 6, background: sev.color, width: "100%" }} />
+
+        {/* ── Red Alert Banner ── */}
+        {redAlertTriggered && (
+          <div style={{
+            padding: "10px 16px", background: "#dc2626", color: "#ffffff",
+            fontSize: 13, fontWeight: 700, textAlign: "center", letterSpacing: "0.02em",
+          }}>
+            🚨 {T.redAlert}
+          </div>
+        )}
 
         {/* ── Low Confidence Banner ── */}
         {data.confidence != null && data.confidence < 70 && (
@@ -364,6 +391,25 @@ export default function DiseaseResultCard({
             </div>
           )}
 
+          {/* ── Economic Impact ── */}
+          {(economicImpact || sections.ECONOMIC_IMPACT) && (
+            <div style={{
+              marginBottom: 18, padding: "12px 14px",
+              background: "#fffbeb", border: "1px solid #fcd34d",
+              borderRadius: 10,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 6 }}>
+                <span style={{ fontSize: 16 }}>💰</span>
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#b45309" }}>
+                  {T.economicImpact}
+                </span>
+              </div>
+              <p style={{ margin: 0, fontSize: 13, color: "#92400e", lineHeight: 1.6, fontWeight: 500 }}>
+                {economicImpact || sections.ECONOMIC_IMPACT}
+              </p>
+            </div>
+          )}
+
           {/* ── Advisory sections ── */}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
 
@@ -428,8 +474,22 @@ export default function DiseaseResultCard({
               </>
             )}
 
+            {/* ── Weather Advisory ── always visible */}
+            <AdvisorySection icon="🌦" title={T.weatherAdvisory} accentColor="#0891b2" delay={0.0}>
+              <p style={{ margin: 0, fontSize: 12, color: "#0c4a6e" }}>
+                {weatherAdvisory || "Hyperlocal weather impact — check the Weather tab for conditions in your area."}
+              </p>
+            </AdvisorySection>
+
+            {/* ── Mandi Price Intel ── always visible */}
+            <AdvisorySection icon="📊" title={T.mandiIntel} accentColor="#d97706" delay={0.0}>
+              <p style={{ margin: 0, fontSize: 12, color: "#78350f" }}>
+                {mandiAdvisory || "Real-time market price comparison — check the Market tab for live mandi prices."}
+              </p>
+            </AdvisorySection>
+
             {/* Show more / less toggle — only if there are more sections to show */}
-            {(sections.CHEMICAL_TREATMENT || sections.ORGANIC_ALTERNATIVE || sections.FARMER_TIP) && (
+            {(sections.CHEMICAL_TREATMENT || sections.ORGANIC_ALTERNATIVE || sections.PREVENTION_NEXT_SEASON || sections.CALL_OFFICER_IF || sections.FARMER_TIP) && (
               <button
                 onClick={() => setExpanded(v => !v)}
                 style={{

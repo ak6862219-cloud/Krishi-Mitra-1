@@ -1,63 +1,84 @@
+// Converts **bold** and *italic* markers into React elements
+const renderInline = (text) => {
+  const parts = text.split(/(\*\*.*?\*\*|\*.*?\*)/g)
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**'))
+      return <strong key={i}>{part.slice(2, -2)}</strong>
+    if (part.startsWith('*') && part.endsWith('*'))
+      return <em key={i}>{part.slice(1, -1)}</em>
+    return part
+  })
+}
+
 const ResponseFormatter = ({ content }) => {
-  const formatResponse = (text) => {
-    // Split by SUMMARY and KEY POINTS sections
-    const summaryMatch = text.match(/\*\*SUMMARY:\*\*\s*(.*?)(?=\*\*KEY POINTS:\*\*|$)/s)
-    const keyPointsMatch = text.match(/\*\*KEY POINTS:\*\*\s*(.*?)$/s)
-    
-    const summary = summaryMatch ? summaryMatch[1].trim() : ''
-    const keyPointsText = keyPointsMatch ? keyPointsMatch[1].trim() : ''
-    
-    // Extract bullet points - handle multiple formats
-    const keyPoints = keyPointsText
-      .split(/\n/)
-      .map(line => line.replace(/^[•\-\*\d\.\s]+/, '').trim())
-      .filter(point => point.length > 0)
-    
-    return { summary, keyPoints }
+  if (!content) return null
+
+  // Split into lines and parse structure
+  const lines = content.split('\n')
+  const elements = []
+  let i = 0
+
+  while (i < lines.length) {
+    const line = lines[i].trim()
+
+    if (!line) { i++; continue }
+
+    // Numbered list item: "1. text" or "1) text"
+    const numberedMatch = line.match(/^(\d+)[.)]\s+(.*)/)
+    if (numberedMatch) {
+      const items = []
+      while (i < lines.length) {
+        const l = lines[i].trim()
+        const m = l.match(/^(\d+)[.)]\s+(.*)/)
+        if (!m) break
+        items.push(m[2])
+        i++
+      }
+      elements.push(
+        <ol key={`ol-${i}`} style={{ paddingLeft: '1.4em', margin: '8px 0', lineHeight: 1.7 }}>
+          {items.map((item, idx) => (
+            <li key={idx} style={{ marginBottom: 6, fontSize: 14, color: '#1f2937' }}>
+              {renderInline(item)}
+            </li>
+          ))}
+        </ol>
+      )
+      continue
+    }
+
+    // Bullet list item: "- text" or "• text" or "* text"
+    const bulletMatch = line.match(/^[-•*]\s+(.*)/)
+    if (bulletMatch) {
+      const items = []
+      while (i < lines.length) {
+        const l = lines[i].trim()
+        const m = l.match(/^[-•*]\s+(.*)/)
+        if (!m) break
+        items.push(m[1])
+        i++
+      }
+      elements.push(
+        <ul key={`ul-${i}`} style={{ paddingLeft: '1.4em', margin: '8px 0', lineHeight: 1.7 }}>
+          {items.map((item, idx) => (
+            <li key={idx} style={{ marginBottom: 6, fontSize: 14, color: '#1f2937' }}>
+              {renderInline(item)}
+            </li>
+          ))}
+        </ul>
+      )
+      continue
+    }
+
+    // Regular paragraph
+    elements.push(
+      <p key={`p-${i}`} style={{ margin: '6px 0', fontSize: 14, color: '#1f2937', lineHeight: 1.7 }}>
+        {renderInline(line)}
+      </p>
+    )
+    i++
   }
 
-  const { summary, keyPoints } = formatResponse(content)
-
-  return (
-    <div className="formatted-response">
-      {summary && (
-        <div className="response-summary">
-          <div className="summary-header">
-            <span className="summary-icon">📋</span>
-            <h4>Summary</h4>
-          </div>
-          <p className="summary-text">{summary}</p>
-        </div>
-      )}
-      
-      {keyPoints.length > 0 && (
-        <div className="response-keypoints">
-          <div className="keypoints-header">
-            <span className="keypoints-icon">🔑</span>
-            <h4>Key Points</h4>
-          </div>
-          <div className="keypoints-list">
-            {keyPoints.map((point, index) => (
-              <div key={index} className="keypoint-item">
-                <span className="keypoint-number">{index + 1}</span>
-                <span className="keypoint-text">{point}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-      
-      {!summary && keyPoints.length === 0 && (
-        <div className="fallback-response">
-          <div className="simple-response">
-            {content.split('\n').map((line, index) => (
-              line.trim() && <p key={index}>{line.trim()}</p>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  )
+  return <div style={{ padding: '2px 0' }}>{elements}</div>
 }
 
 export default ResponseFormatter

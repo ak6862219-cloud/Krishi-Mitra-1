@@ -17,6 +17,7 @@ Run:
 import os, io, logging, time, asyncio
 from pathlib import Path
 from typing import Optional
+from collections import deque
 
 import httpx
 import numpy as np
@@ -25,7 +26,16 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import google.generativeai as genai
+
+# ─── NEW SDK: google-genai (replaces deprecated google-generativeai) ──────────
+try:
+    from google import genai
+    from google.genai import types as genai_types
+    _GENAI_NEW_SDK = True
+except ImportError:
+    # graceful fallback — warn loudly
+    _GENAI_NEW_SDK = False
+    logging.warning("google-genai not installed. AI features disabled. Run: pip install google-genai")
 
 load_dotenv()
 
@@ -39,10 +49,16 @@ ALLOWED_ORIGINS  = os.getenv(
     "http://localhost:5173,http://localhost:3000"
 ).split(",")
 
+# ─── Model chain (fallback order when primary is overloaded) ─────────────────
+# gemini-2.0-flash is quota-exhausted on this project — excluded from chain
+PRIMARY_MODEL    = "gemini-2.5-flash"
+FALLBACK_MODEL   = "gemini-2.5-flash-lite"
+FALLBACK_MODEL_2 = "gemini-flash-latest"
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
 log = logging.getLogger("krishi")
 
-app = FastAPI(title="Krishi Mitra API", version="2.0.0")
+app = FastAPI(title="Krishi Mitra API", version="3.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],   # dev — lock to ALLOWED_ORIGINS in prod
@@ -50,6 +66,44 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ─── Rate Limiter (global, in-memory) ─────────────────────────────────────────
+# Protects the free-tier Gemini quota (20 RPD / ~2 RPM on free tier)
+_rate_window   = deque()          # timestamps of recent AI calls
+RATE_LIMIT_RPM = 12               # max requests per minute (conservative)
+RATE_LIMIT_RPD = 18               # max requests per day (leave 2 buffer)
+_daily_count   = 0
+_daily_reset   = time.time()
+
+def _check_rate_limit() -> tuple[bool, str]:
+    """Returns (allowed: bool, reason: str)."""
+    global _daily_count, _daily_reset
+    now = time.time()
+
+    # Reset daily counter every 24h
+    if now - _daily_reset > 86400:
+        _daily_count = 0
+        _daily_reset = now
+
+    if _daily_count >= RATE_LIMIT_RPD:
+        log.warning(f"Daily AI quota reached ({_daily_count}/{RATE_LIMIT_RPD})")
+        return False, "daily_quota"
+
+    # Sliding-window RPM check (keep only last 60 seconds)
+    while _rate_window and now - _rate_window[0] > 60:
+        _rate_window.popleft()
+
+    if len(_rate_window) >= RATE_LIMIT_RPM:
+        log.warning(f"Minute rate limit hit ({len(_rate_window)}/{RATE_LIMIT_RPM})")
+        return False, "minute_quota"
+
+    return True, "ok"
+
+def _record_ai_call():
+    global _daily_count
+    _rate_window.append(time.time())
+    _daily_count += 1
+    log.info(f"AI call recorded — daily: {_daily_count}/{RATE_LIMIT_RPD}, rpm: {len(_rate_window)}/{RATE_LIMIT_RPM}")
 
 # ─── Simple in-memory cache ────────────────────────────────────────────────────
 _cache: dict[str, tuple[dict, float]] = {}
@@ -147,11 +201,19 @@ def predict_disease(image_bytes: bytes):
 
 # ─── Gemini prompts ───────────────────────────────────────────────────────────
 
+def _estimate_severity_from_confidence(confidence: float) -> str:
+    """Pre-estimate severity from model confidence for use in Gemini prompt."""
+    if confidence >= 0.85: return "Severe"
+    if confidence >= 0.60: return "Moderate"
+    return "Low"
+
+
 def build_detailed_prompt(disease: str, confidence: float, crop: str,
-                           region: str, season: str, language: str) -> str:
+                           region: str, season: str, language: str,
+                           severity: str = "Moderate", land_acres: float = 2.0) -> str:
     lang_name = {"en": "English", "hi": "Hindi", "ml": "Malayalam"}.get(language, "English")
 
-    return f"""You are Dr. Krishi, an expert plant pathologist and agricultural advisor for Indian farmers.
+    return f"""You are an expert agricultural advisor for Indian farmers. Respond ONLY in the exact format below. Do not add any extra text, markdown, or explanation outside these keys.
 
 A farmer's crop photo was analyzed by an AI model:
 - Crop: {crop}
@@ -159,46 +221,36 @@ A farmer's crop photo was analyzed by an AI model:
 - Model Confidence: {confidence:.0%}
 - Farmer's Region: {region}
 - Current Season: {season}
-- Response Language: {lang_name}
+- Land Size: {land_acres} acres
 
-Generate a COMPLETE clinical advisory report. You MUST include ALL sections below with EXACTLY these labels on their own line (even in non-English responses, keep the label in English):
-
-DISEASE_SUMMARY:
-[Write 2-3 sentences explaining what this disease is, how it spreads, and why it is dangerous for {crop}. Simple words only — imagine explaining to a farmer who has never heard of it.]
-
-SEVERITY:
-[Write ONLY one word: Low OR Moderate OR Severe]
-
+DISEASE_SUMMARY: [2-3 sentences explaining what this disease is, how it spreads, in simple language]
+SEVERITY: [{severity}]
 VISIBLE_SYMPTOMS:
-- [Symptom 1: specific visual sign the farmer can look for]
-- [Symptom 2: another visible sign]
-- [Symptom 3: third sign]
-
+- [symptom 1]
+- [symptom 2]
+- [symptom 3]
 IMMEDIATE_ACTION_48H:
-- [Specific action to do TODAY — be very precise]
-- [Second action within 48 hours]
-- [Third action if applicable]
-
-CHEMICAL_TREATMENT:
-[Name the specific fungicide/pesticide/bactericide with generic chemical name (NOT brand name). Include dosage: how many grams or ml per litre of water. Include how many times to spray and at what interval.]
-
-ORGANIC_ALTERNATIVE:
-[One organic/home remedy that works — neem oil, copper spray, etc. with specific preparation method.]
-
+- [specific action 1]
+- [specific action 2]
+- [specific action 3]
+CHEMICAL_TREATMENT: [specific chemical name, dosage, application method. Mention cheapest generic option, not branded]
+ORGANIC_ALTERNATIVE: [organic/home remedy option that is low cost]
 PREVENTION_NEXT_SEASON:
-- [Prevention tip 1 for next planting season]
-- [Prevention tip 2]
+- [prevention tip 1]
+- [prevention tip 2]
+ECONOMIC_IMPACT: [Estimate rupee loss if untreated for {land_acres} acres. Format: "Potential loss: ₹X,XXX - ₹X,XXX if not treated within 48 hours"]
+CALL_OFFICER_IF: [specific condition when farmer should escalate to expert]
+FARMER_TIP: [one practical memorable tip in simple Hindi-friendly language]
 
-CALL_OFFICER_IF:
-[Specific threshold: e.g. "If more than 30% of leaves show symptoms" or "If disease spreads to stem within 3 days" — be precise.]
+Disease: {disease}
+Crop: {crop}
+Severity: {severity}
+Land size: {land_acres} acres
+Respond in: {"Hindi" if language == "hi" else "Malayalam" if language == "ml" else "English"}
 
-FARMER_TIP:
-[One encouraging, practical tip in very simple conversational language. This should feel warm and personal.]
-
-RULES:
-- Write ALL content in {lang_name}
-- Keep the section LABELS (DISEASE_SUMMARY:, SEVERITY:, etc.) in English — do not translate them
-- NO markdown formatting, NO asterisks, NO bold, NO headers with #
+FORMATTING RULES:
+- Keep ALL section LABELS in English — do not translate them
+- NO markdown, NO asterisks, NO bold, NO headers with #
 - Each bullet point starts with a hyphen (-)
 - Be specific with amounts, timings, and percentages
 - Tone: expert but warm, like a trusted village doctor"""
@@ -206,8 +258,10 @@ RULES:
 
 def build_short_prompt(disease: str, confidence: float, crop: str,
                         region: str, season: str, language: str) -> str:
-    lang_name = {"en": "English", "hi": "Hindi", "ml": "Malayalam"}.get(language, "English")
+    lang_name = {"en": "English", "hi": "Hindi", "ml": "Malayalam",
+                 "bn": "Bengali", "te": "Telugu", "mr": "Marathi"}.get(language, "Hindi")
     return f"""You are a helpful farm advisor. Write a SHORT WhatsApp message for a farmer.
+STRICT: Only agriculture topics. Do NOT hallucinate or guess location.
 
 Disease: {disease} on {crop}
 Confidence: {confidence:.0%}
@@ -225,91 +279,350 @@ Rules:
 
 def build_chat_prompt(question: str, state: str, weather_summary: str,
                        active_crops: str, language: str) -> str:
-    lang_name = {"en": "English", "hi": "Hindi", "ml": "Malayalam"}.get(language, "English")
-    return (
-        "You are Krishi Mitra, an expert AI agricultural advisor for Indian farmers.\n\n"
-        "Context about this farmer:\n"
-        f"- Location: {state}, India\n"
-        f"- Current weather: {weather_summary or 'not provided'}\n"
-        f"- Crops mentioned: {active_crops or 'not specified'}\n\n"
-        "Your response rules:\n"
-        "1. Always give practical, actionable advice specific to Indian farming conditions\n"
-        "2. Mention specific fertilizer/pesticide names with exact quantities when relevant\n"
-        "3. Reference Indian seasons: Kharif (June-Oct), Rabi (Oct-Mar), Zaid (Mar-Jun)\n"
-        "4. For disease/pest queries, suggest both chemical AND organic options\n"
-        "5. If the question is about a government scheme, mention the scheme name and application link\n"
-        "6. Keep responses under 150 words — clear and simple for farmers\n"
-        f"7. Language: {lang_name}\n\n"
-        "IMPORTANT: If you are not sure, say 'Please consult your local KVK (Krishi Vigyan Kendra)' rather than guessing.\n\n"
-        f"Farmer question: {question}"
+    lang_name = {
+        "en": "English", "hi": "Hindi", "ml": "Malayalam",
+        "bn": "Bengali", "te": "Telugu", "mr": "Marathi",
+    }.get(language, "Hindi")
+
+    system_prompt = f"""You are Krishi Mitra, an expert AI farming assistant for Indian farmers.
+
+LANGUAGE RULE: You MUST respond ONLY in {lang_name}. Never switch languages mid-response.
+
+YOUR EXPERTISE:
+- Crop diseases: diagnosis, treatment, prevention
+- Fertilizers: which to use, dosage, timing
+- Weather: how to act on weather changes
+- Market prices: when to sell, which mandi
+- Government schemes: PM-KISAN, Fasal Bima, state schemes
+- Soil health: NPK, pH, improvement methods
+- Irrigation: scheduling, water conservation
+
+RESPONSE RULES:
+1. Keep responses SHORT — 3-5 sentences max for simple questions
+2. Always give ACTIONABLE advice, not just information
+3. Always mention RUPEE COST impact where relevant ("Isse aapko ₹500-1000 ka faida hoga")
+4. For disease questions, always ask: "Kya aap photo upload kar sakte hain for exact diagnosis?"
+5. Never recommend expensive branded products — always mention generic/cheaper alternatives
+6. If question is unclear, ask ONE clarifying question only
+
+PERSONALITY: You are like a trusted friend who happens to be an agriculture expert. Warm, simple language, no jargon.
+
+### CONTEXT
+- Farmer location: {state}, India
+- Current weather: {weather_summary or 'not provided'}
+- Crops mentioned: {active_crops or 'not specified'}
+
+### STRICT RULES
+- ONLY answer about: Crops, Plant diseases, Fertilizers, Pesticides, Weather impact on crops, Market prices, Government agricultural schemes
+- DO NOT hallucinate or invent details
+- DO NOT say things like "Nice to connect from [random place]"
+- If unsure: say "I'm not fully certain. Please consult your local KVK or agriculture officer."
+
+Farmer's question: {question}"""
+
+    return system_prompt
+
+
+# ─── Gemini AI helper (new SDK) ───────────────────────────────────────────────
+
+def _is_quota_error(e: Exception) -> bool:
+    """Detect 429 / quota exceeded errors only — NOT 503 service unavailable."""
+    msg = str(e).lower()
+    return "429" in msg or "quota" in msg or "resource_exhausted" in msg
+
+def _call_model(client, model_name: str, prompt: str, max_tokens: int) -> str:
+    """Single model call — raises on error."""
+    log.info(f"Gemini call — model: {model_name}")
+    response = client.models.generate_content(
+        model=model_name,
+        contents=prompt,
+        config=genai_types.GenerateContentConfig(
+            temperature=0.3,
+            max_output_tokens=max_tokens,
+        ),
+    )
+    return response.text.strip()
+
+
+def _call_gemini_sync(prompt: str, max_tokens: int = 1200) -> Optional[str]:
+    """
+    Call Gemini using new google-genai SDK.
+    Model chain: gemini-2.5-flash → gemini-2.5-flash-lite → gemini-flash-latest → static fallback.
+    Retries once on transient errors. Skips retry on 429 (quota).
+    Returns None only if ALL models are quota-exhausted.
+    """
+    if not _GENAI_NEW_SDK:
+        raise RuntimeError("google-genai SDK not installed")
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY not configured")
+
+    allowed, reason = _check_rate_limit()
+    if not allowed:
+        log.warning(f"Internal rate limit ({reason}) — skipping AI call")
+        return None
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    models_to_try = [PRIMARY_MODEL, FALLBACK_MODEL, FALLBACK_MODEL_2]
+
+    for model_name in models_to_try:
+        for attempt in range(2):  # retry once per model on transient errors
+            try:
+                result = _call_model(client, model_name, prompt, max_tokens)
+                _record_ai_call()
+                log.info(f"Gemini success — model: {model_name}")
+                return result
+
+            except Exception as e:
+                log.error(f"Gemini error [{model_name}] attempt {attempt + 1}: {type(e).__name__}: {e}")
+
+                if _is_quota_error(e):
+                    log.warning(f"Quota/429 on {model_name} — trying next model in chain")
+                    break  # move to next model, don't retry same model on 429
+
+                if attempt == 0:
+                    log.info(f"Transient error on {model_name} — retrying in 2s")
+                    time.sleep(2.0)
+                else:
+                    log.warning(f"Transient error on {model_name} persisted after retry — trying next model")
+                    break
+
+    log.error("All models in chain exhausted or quota-exceeded — returning None for static fallback")
+    return None
+
+
+async def _call_gemini_async(prompt: str, max_tokens: int = 800) -> Optional[str]:
+    """Async wrapper for chat endpoint — runs sync call in thread pool."""
+    loop = asyncio.get_event_loop()
+    return await asyncio.wait_for(
+        loop.run_in_executor(None, lambda: _call_gemini_sync(prompt, max_tokens)),
+        timeout=30.0
     )
 
 
 def get_gemini_advisory(disease: str, confidence: float, crop: str,
-                         region: str, season: str, language: str, mode: str) -> str:
-    if not GEMINI_API_KEY:
-        log.warning("No GEMINI_API_KEY — using fallback advisory")
+                         region: str, season: str, language: str, mode: str,
+                         severity: str = "Moderate", land_acres: float = 2.0) -> str:
+    """
+    Get advisory from Gemini with proper fallback.
+    ALWAYS returns a non-empty string — never fails visibly to the user.
+    """
+    if not GEMINI_API_KEY or not _GENAI_NEW_SDK:
+        log.warning("AI unavailable — using static fallback advisory")
         return _fallback_advisory(disease, crop, mode)
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-1.5-flash")
-
-    prompt = (build_short_prompt if mode == "short" else build_detailed_prompt)(
-        disease, confidence, crop, region, season, language
-    )
+    if mode == "short":
+        prompt = build_short_prompt(disease, confidence, crop, region, season, language)
+    else:
+        prompt = build_detailed_prompt(disease, confidence, crop, region, season, language,
+                                       severity=severity, land_acres=land_acres)
 
     try:
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.3,
-                max_output_tokens=1200,
-            ),
-        )
-        return response.text.strip()
+        result = _call_gemini_sync(prompt, max_tokens=1200 if mode == "detailed" else 300)
+        if result is None:
+            log.info("Gemini returned None (quota/rate limit) — using structured fallback")
+            return _fallback_advisory(disease, crop, mode)
+        if mode == "detailed":
+            return _normalize_detailed_advisory(
+                result,
+                disease=disease,
+                crop=crop,
+                severity=severity,
+                land_acres=land_acres,
+            )
+        return result
     except Exception as e:
-        log.error(f"Gemini error: {e}")
+        log.error(f"Advisory generation failed: {e}")
         return _fallback_advisory(disease, crop, mode)
 
 
 def _fallback_advisory(disease: str, crop: str, mode: str) -> str:
+    """
+    Structured fallback advisory — disease-specific where possible.
+    NEVER returns an empty string.
+    """
+    # Disease-specific fallbacks for common diseases
+    disease_lower = disease.lower()
+
+    disease_tips = {
+        "early blight": {
+            "summary": f"Early Blight is a fungal disease caused by Alternaria solani that creates dark brown spots with yellow rings on {crop} leaves. It spreads through infected soil, water splash, and wind. It can cause up to 50% yield loss if not treated early.",
+            "chemical": "Apply Mancozeb 75% WP at 2.5 grams per litre of water. Spray every 7 days for 3 consecutive weeks.",
+            "organic": "Mix 10ml neem oil with 1 litre water and a few drops of soap. Spray every 5 days on all leaf surfaces.",
+        },
+        "late blight": {
+            "summary": f"Late Blight is caused by Phytophthora infestans — a highly destructive water mold that can destroy a {crop} field within days. It spreads rapidly in cool, wet conditions.",
+            "chemical": "Apply Cymoxanil + Mancozeb (72% WP) at 3 grams per litre. Spray every 5-7 days. Start at first sign of infection.",
+            "organic": "Spray copper sulphate solution (3 grams per litre water) every 5 days. Remove and burn all infected leaves immediately.",
+        },
+        "bacterial spot": {
+            "summary": f"Bacterial Spot is caused by Xanthomonas bacteria and creates water-soaked spots on {crop} leaves and fruits. It spreads through rain splash, contaminated tools, and infected seeds.",
+            "chemical": "Spray copper hydroxide (Kocide) at 3 grams per litre every 7 days. Do not spray in hot afternoon sun.",
+            "organic": "Apply neem leaf extract solution or copper soap spray every week. Remove infected plant debris from the field.",
+        },
+        "powdery mildew": {
+            "summary": f"Powdery Mildew is a fungal disease that forms a white powdery coating on {crop} leaves, stems, and flowers. It thrives in dry, warm conditions with high humidity.",
+            "chemical": "Apply Sulphur 80% WP at 2-3 grams per litre of water. Spray every 10 days. Or use Hexaconazole 5% EC at 1ml per litre.",
+            "organic": "Mix 1 tablespoon baking soda + few drops liquid soap in 1 litre water. Spray on affected areas every 5-7 days.",
+        },
+        "leaf scorch": {
+            "summary": f"Leaf Scorch causes brown, dry edges on {crop} leaves, often due to fungal infection, heat stress, or drought. It can weaken the plant and reduce fruit quality significantly.",
+            "chemical": "Apply Carbendazim 50% WP at 1 gram per litre if fungal. Spray twice at 10-day intervals.",
+            "organic": "Spray neem oil (5ml per litre) to reduce fungal spread. Ensure adequate and regular watering at the plant base.",
+        },
+        "mosaic virus": {
+            "summary": f"Mosaic Virus is a viral disease spread by aphids and whiteflies that causes mottled yellow-green patterns on {crop} leaves. There is no chemical cure — only prevention and control.",
+            "chemical": "Spray Imidacloprid 17.8% SL at 0.5ml per litre to control vector insects (aphids/whiteflies) that spread the virus.",
+            "organic": "Spray diluted neem oil (10ml per litre) to repel virus-carrying insects. Remove and destroy all infected plants to stop spread.",
+        },
+    }
+
+    # Match disease to specific tips
+    specific = None
+    for key, tips in disease_tips.items():
+        if key in disease_lower:
+            specific = tips
+            break
+
+    # Generic fallback if no specific match
+    if not specific:
+        specific = {
+            "summary": f"{disease} is a plant infection detected on your {crop} crop. It can spread rapidly under humid or warm conditions and cause significant yield loss if not treated early.",
+            "chemical": "Apply Mancozeb 75% WP at 2.5 grams per litre of water. Spray every 7 days for 3 consecutive weeks. Spray in the morning or evening.",
+            "organic": "Mix 10ml neem oil with 1 litre of water and a few drops of liquid soap. Spray on all leaf surfaces every 5-7 days.",
+        }
+
     if mode == "short":
         return (
-            f"Your {crop} has {disease} — isolate affected plants immediately and avoid overhead watering. "
-            f"Apply copper-based fungicide (2g per litre of water) as a first measure. "
+            f"Your {crop} has {disease} — remove infected leaves and avoid overhead watering immediately. "
+            f"{specific['chemical'].split('.')[0]}. "
             f"Next season, use certified disease-resistant seeds to prevent recurrence."
         )
+
     return f"""DISEASE_SUMMARY:
-{disease} is a plant infection detected on your {crop} crop. It can spread rapidly under humid conditions and cause significant yield loss if not treated early.
+{specific['summary']}
 
 SEVERITY:
 Moderate
 
 VISIBLE_SYMPTOMS:
-- Discolored or spotted areas on leaves
+- Discolored, spotted, or unusual areas on leaves or stems
 - Wilting or yellowing of affected plant parts
-- Unusual growth patterns or lesions
+- Unusual growth patterns, lesions, or coating on leaves
 
 IMMEDIATE_ACTION_48H:
-- Remove and destroy all visibly infected leaves and plant parts
+- Remove and destroy all visibly infected leaves and plant parts immediately
 - Avoid watering from above — water only at the base of the plant
-- Isolate severely affected plants from healthy ones
+- Isolate severely affected plants from healthy ones to prevent spread
 
 CHEMICAL_TREATMENT:
-Apply Mancozeb 75% WP at 2.5 grams per litre of water. Spray every 7 days for 3 consecutive weeks. Spray in the morning or evening, not in direct afternoon sun.
+{specific['chemical']}
 
 ORGANIC_ALTERNATIVE:
-Mix 10ml neem oil with 1 litre of water and a few drops of liquid soap. Spray on all leaf surfaces every 5-7 days.
+{specific['organic']}
 
 PREVENTION_NEXT_SEASON:
 - Use certified disease-free or disease-resistant seeds for next planting
-- Maintain proper spacing between plants for air circulation
+- Maintain proper spacing between plants for air circulation and sunlight
+
+ECONOMIC_IMPACT:
+Potential loss: ₹3,000 - ₹8,000 if not treated within 48 hours
 
 CALL_OFFICER_IF:
 If more than 30% of your plants show symptoms, or if the disease spreads to the stem or fruits within 3 days of treatment.
 
 FARMER_TIP:
-Act quickly — early treatment saves your crop. Even treating half the field today is better than waiting."""
+Act quickly — early treatment saves your crop. Even treating half the field today is better than waiting for tomorrow. You can do this!"""
+
+
+def _parse_advisory_section(advisory: str, key: str) -> str:
+    """Extract a section value from structured advisory (supports multiline values)."""
+    sections = _extract_advisory_sections(advisory)
+    return sections.get(key, "")
+
+
+def _extract_advisory_sections(text: str) -> dict[str, str]:
+    """Parse advisory text into sections using known keys (markdown-tolerant)."""
+    keys = [
+        "DISEASE_SUMMARY", "SEVERITY", "VISIBLE_SYMPTOMS",
+        "IMMEDIATE_ACTION_48H", "CHEMICAL_TREATMENT", "ORGANIC_ALTERNATIVE",
+        "PREVENTION_NEXT_SEASON", "ECONOMIC_IMPACT", "CALL_OFFICER_IF", "FARMER_TIP",
+    ]
+    sections: dict[str, str] = {}
+    current_key: Optional[str] = None
+    buffer: list[str] = []
+
+    def flush() -> None:
+        if current_key:
+            sections[current_key] = "\n".join(buffer).strip()
+
+    for raw in (text or "").splitlines():
+        stripped = raw.strip().strip("*")
+        matched_key = next((k for k in keys if stripped.upper().startswith(k + ":")), None)
+        if matched_key:
+            flush()
+            current_key = matched_key
+            buffer = []
+            inline = stripped[len(matched_key) + 1 :].strip().strip("[]")
+            if inline:
+                buffer.append(inline)
+            continue
+        if current_key:
+            clean = raw.strip().strip("*")
+            if clean:
+                buffer.append(clean)
+
+    flush()
+    return sections
+
+
+def _normalize_detailed_advisory(advisory: str, disease: str, crop: str,
+                                 severity: str = "Moderate", land_acres: float = 2.0) -> str:
+    """Ensure detailed advisory always contains all required structured sections."""
+    primary = _extract_advisory_sections(advisory)
+    fallback = _extract_advisory_sections(_fallback_advisory(disease, crop, "detailed"))
+
+    required = [
+        "DISEASE_SUMMARY", "SEVERITY", "VISIBLE_SYMPTOMS", "IMMEDIATE_ACTION_48H",
+        "CHEMICAL_TREATMENT", "ORGANIC_ALTERNATIVE", "PREVENTION_NEXT_SEASON",
+        "ECONOMIC_IMPACT", "CALL_OFFICER_IF", "FARMER_TIP",
+    ]
+
+    merged: dict[str, str] = {}
+    for key in required:
+        value = (primary.get(key, "") or "").strip()
+        if not value:
+            value = (fallback.get(key, "") or "").strip()
+        merged[key] = value
+
+    if not merged["SEVERITY"]:
+        merged["SEVERITY"] = severity
+
+    if not merged["ECONOMIC_IMPACT"]:
+        merged["ECONOMIC_IMPACT"] = (
+            f"Potential loss: ₹3,000 - ₹8,000 if not treated within 48 hours for {land_acres} acres"
+        )
+
+    bullet_keys = {"VISIBLE_SYMPTOMS", "IMMEDIATE_ACTION_48H", "PREVENTION_NEXT_SEASON"}
+    lines: list[str] = []
+
+    for key in required:
+        lines.append(f"{key}:")
+        value = merged[key]
+        if key in bullet_keys:
+            items = [
+                v.strip().lstrip("- ").strip()
+                for v in value.splitlines()
+                if v.strip()
+            ]
+            for item in items:
+                lines.append(f"- {item}")
+            if not items:
+                lines.append("- Data not available")
+        else:
+            lines.append(value or "Data not available")
+        lines.append("")
+
+    return "\n".join(lines).strip()
 
 
 def extract_severity(advisory: str) -> str:
@@ -353,8 +666,12 @@ def health():
         "status": "ok",
         "mock_mode": USE_MOCK_MODEL,
         "model_path": MODEL_PATH,
+        "ai_sdk": "google-genai (new)" if _GENAI_NEW_SDK else "unavailable",
+        "primary_model": PRIMARY_MODEL,
+        "daily_ai_calls": _daily_count,
+        "daily_limit": RATE_LIMIT_RPD,
         "services": {
-            "gemini":    bool(GEMINI_API_KEY),
+            "gemini":    bool(GEMINI_API_KEY) and _GENAI_NEW_SDK,
             "weather":   bool(WEATHER_API_KEY),
             "agmarknet": bool(AGMARKNET_KEY),
         }
@@ -393,27 +710,64 @@ async def analyze_image(
         log.exception("Prediction failed")
         raise HTTPException(500, f"Prediction error: {e}")
 
-    if confidence < 0.55:
-        return {
-            "raw_class": "Unrecognised", "disease": "Unrecognised", "crop": "Unknown",
-            "confidence": round(confidence * 100, 1), "is_healthy": False, "severity": "low",
-            "advisory_short": "Image not clear enough. Please upload a clear, well-lit photo of the affected leaf.",
-            "advisory_detail": "DISEASE_SUMMARY:\nThe AI could not confidently identify a disease from this image.\n\nSEVERITY:\nLow\n\nIMMEDIATE_ACTION_48H:\n- Take a new photo in good daylight\n- Ensure the diseased leaf fills the frame\n- Avoid shadows or blurry shots\n\nCALL_OFFICER_IF:\nIf the plant is visibly dying, contact your agricultural officer immediately.",
-        }
-
     advisory_short  = get_gemini_advisory(disease, confidence, crop, region, season, language, "short")
-    advisory_detail = get_gemini_advisory(disease, confidence, crop, region, season, language, "detailed")
+
+    # Pre-estimate severity from ML confidence for use in the Gemini prompt
+    estimated_severity = _estimate_severity_from_confidence(confidence)
+    advisory_detail = get_gemini_advisory(disease, confidence, crop, region, season, language, "detailed",
+                                          severity=estimated_severity)
+
+    # Ensure advisory is NEVER empty
+    if not advisory_short or not advisory_short.strip():
+        advisory_short = _fallback_advisory(disease, crop, "short")
+    if not advisory_detail or not advisory_detail.strip():
+        advisory_detail = _fallback_advisory(disease, crop, "detailed")
+
     severity = "low" if is_healthy else extract_severity(advisory_detail)
 
+    # Parse ECONOMIC_IMPACT section from advisory
+    economic_impact = _parse_advisory_section(advisory_detail, "ECONOMIC_IMPACT")
+
+    # Build weather advisory using region/season/disease context
+    disease_lower = disease.lower()
+    if any(w in disease_lower for w in ["blight", "mildew", "rust", "rot", "mold", "spot"]):
+        weather_advisory = (
+            f"Fungal diseases like {disease} spread rapidly in humid weather (>80% humidity) and rainy conditions. "
+            f"Avoid spraying chemicals before expected rain. Check the Weather tab for {region} conditions before scheduling treatment."
+        )
+    elif any(w in disease_lower for w in ["virus", "mosaic", "bacterial"]):
+        weather_advisory = (
+            f"Bacterial/viral spread is worsened by wet, windy weather. "
+            f"Check the Weather tab for current {region} conditions to time your spraying window correctly."
+        )
+    else:
+        weather_advisory = (
+            f"Monitor {region} weather conditions before applying treatment. "
+            f"Spray in early morning or evening — avoid hot afternoon sun. Check the Weather tab for a 5-day forecast."
+        )
+
+    # Build mandi advisory for the crop
+    mandi_advisory = (
+        f"Treating {disease} on {crop} promptly helps preserve crop market value. "
+        f"Check live {crop} prices in the Market tab to time your sale. "
+        f"Healthy {crop} fetches a significant premium over diseased produce."
+    )
+
+    log.info(f"Analysis complete — disease: {disease}, crop: {crop}, severity: {severity}, ai_used: {bool(GEMINI_API_KEY)}")
+
     return {
-        "raw_class":       raw_class,
-        "disease":         disease,
-        "crop":            crop,
-        "confidence":      round(confidence * 100, 1),
-        "is_healthy":      is_healthy,
-        "severity":        severity,
-        "advisory_short":  advisory_short,
-        "advisory_detail": advisory_detail,
+        "raw_class":           raw_class,
+        "disease":             disease,
+        "crop":                crop,
+        "confidence":          round(confidence * 100, 1),
+        "is_healthy":          is_healthy,
+        "severity":            severity,
+        "advisory_short":      advisory_short,
+        "advisory_detail":     advisory_detail,
+        "economic_impact":     economic_impact,
+        "red_alert_triggered": severity == "high",
+        "weather_advisory":    weather_advisory,
+        "mandi_advisory":      mandi_advisory,
     }
 
 @app.post("/advisory")
@@ -422,6 +776,20 @@ def get_advisory(req: AdvisoryRequest):
         req.disease_name, req.confidence, req.crop,
         req.region, req.season, req.language, req.mode,
     )
+
+    # GUARANTEE non-empty advisory
+    if not advisory or not advisory.strip():
+        advisory = _fallback_advisory(req.disease_name, req.crop, req.mode)
+
+    if req.mode == "detailed":
+        advisory = _normalize_detailed_advisory(
+            advisory,
+            disease=req.disease_name,
+            crop=req.crop,
+            severity="Moderate",
+            land_acres=2.0,
+        )
+
     return {
         "disease":  req.disease_name,
         "crop":     req.crop,
@@ -431,57 +799,63 @@ def get_advisory(req: AdvisoryRequest):
         "severity": extract_severity(advisory),
     }
 
-# ─── NEW: Secure Gemini Chat Proxy ────────────────────────────────────────────
+# ─── Secure Gemini Chat Proxy ─────────────────────────────────────────────────
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatRequest):
     """
     Secure chat endpoint — Gemini API key never leaves the server.
     Frontend sends questions, backend adds context and calls Gemini.
+    If AI is unavailable (quota/error), returns a graceful friendly message.
     """
     if not req.question.strip():
         raise HTTPException(400, "Question cannot be empty.")
 
-    if not GEMINI_API_KEY:
-        raise HTTPException(503, "AI service not configured. Please set GEMINI_API_KEY.")
+    if not GEMINI_API_KEY or not _GENAI_NEW_SDK:
+        return {
+            "response": "⚠️ AI is temporarily unavailable. Please try again in a few seconds, or consult your local KVK for immediate assistance.",
+            "timestamp": __import__("datetime").datetime.now().isoformat(),
+            "fallback": True,
+        }
 
     prompt = build_chat_prompt(
-        req.question,
-        req.state,
-        req.weather_summary,
-        req.active_crops,
-        req.language,
+        req.question, req.state, req.weather_summary, req.active_crops, req.language
     )
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-1.5-flash")
-
     try:
-        response = await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: model.generate_content(
-                    prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=0.4,
-                        max_output_tokens=400,
-                    ),
-                )
-            ),
-            timeout=10.0
-        )
+        result = await _call_gemini_async(prompt, max_tokens=800)
+
+        if result is None:
+            # Quota / rate limit — graceful response
+            log.warning("Chat: AI quota reached — returning graceful fallback message")
+            return {
+                "response": "⚠️ AI is busy right now. Please try again in a few seconds. For urgent crop advice, contact your nearest KVK (Krishi Vigyan Kendra).",
+                "timestamp": __import__("datetime").datetime.now().isoformat(),
+                "fallback": True,
+            }
+
         return {
-            "response":  response.text.strip(),
+            "response":  result,
             "timestamp": __import__("datetime").datetime.now().isoformat(),
+            "fallback": False,
         }
+
     except asyncio.TimeoutError:
-        log.error("Gemini chat timed out")
-        raise HTTPException(504, "AI response timed out. Please try again.")
+        log.error("Chat: Gemini timed out")
+        return {
+            "response": "⚠️ AI took too long to respond. Please try again.",
+            "timestamp": __import__("datetime").datetime.now().isoformat(),
+            "fallback": True,
+        }
     except Exception as e:
-        log.error(f"Gemini chat error: {e}")
-        raise HTTPException(500, f"AI service error: {str(e)}")
+        log.error(f"Chat endpoint error: {type(e).__name__}: {e}")
+        return {
+            "response": "⚠️ AI is temporarily unavailable. Please try again in a few seconds.",
+            "timestamp": __import__("datetime").datetime.now().isoformat(),
+            "fallback": True,
+        }
 
 
-# ─── NEW: Weather Proxy (lat/lon or city) ─────────────────────────────────────
+# ─── Weather Proxy (lat/lon or city) ──────────────────────────────────────────
 @app.get("/api/weather")
 async def weather_endpoint(
     lat:  Optional[float] = Query(None),
@@ -582,8 +956,7 @@ async def weather_endpoint(
     return result
 
 
-# ─── NEW: Mandi (Agmarknet) Proxy ─────────────────────────────────────────────
-# District → approximate coordinates for common cities
+# ─── Mandi (Agmarknet) Proxy ──────────────────────────────────────────────────
 CITY_COORDS: dict[str, tuple[float, float]] = {
     "Thiruvananthapuram": (8.5241, 76.9366),
     "Kochi": (9.9312, 76.2673),
@@ -648,7 +1021,6 @@ async def mandi_endpoint(
 
             if res.status_code == 200 and data.get("records"):
                 def calc_trend(records):
-                    """Simple trend from first two records by date."""
                     if len(records) < 2:
                         return "stable"
                     try:
@@ -674,7 +1046,7 @@ async def mandi_endpoint(
                         "minPrice":   r.get("Min_Price"),
                         "maxPrice":   r.get("Max_Price"),
                         "modalPrice": r.get("Modal_Price"),
-                        "price":      r.get("Modal_Price"),   # convenience alias
+                        "price":      r.get("Modal_Price"),
                         "trend":      trend,
                         "date":       r.get("Arrival_Date"),
                         "state":      r.get("State", state),

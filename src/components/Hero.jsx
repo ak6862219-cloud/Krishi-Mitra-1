@@ -219,8 +219,7 @@ export default function Hero() {
         </h1>
 
         <p style={{ ...S.sub, textAlign: "center" }}>
-          Upload a leaf photo and our AI detects disease, severity, and full treatment plan —
-          in seconds, for free.
+          Upload a leaf photo to detect disease, check severity, and get a treatment plan in seconds, free.
         </p>
 
         {/* ── Disease Detection Hero Card ─────────────────────────── */}

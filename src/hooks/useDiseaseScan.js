@@ -106,13 +106,22 @@ export default function useDiseaseScan() {
         mode,
       });
 
+      // GUARD: only update if advisory field is genuinely non-empty
+      const text = advisory?.advisory?.trim();
+      if (!text) {
+        console.warn("getFullAdvisory: empty advisory returned, keeping existing data");
+        return; // keep existing result — don't wipe it
+      }
+
       setResult(prev => ({
         ...prev,
-        advisory_short:  mode === "short"    ? advisory.advisory : prev.advisory_short,
-        advisory_detail: mode === "detailed"  ? advisory.advisory : prev.advisory_detail,
+        advisory_short:  mode === "short"    ? text : prev.advisory_short,
+        advisory_detail: mode === "detailed"  ? text : prev.advisory_detail,
       }));
     } catch (err) {
-      setError(err.message);
+      // Don't surface errors to the user — just log and keep existing result
+      console.warn("getFullAdvisory error (non-fatal):", err.message);
+      // Don't call setError here — the scan result is still valid
     } finally {
       setLoading(false);
     }

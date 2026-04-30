@@ -113,8 +113,11 @@ const SkeletonLoader = ({ type = "weather", count = 1, rows = 5 }) => {
   );
 };
 
-// ─── PREVIEW APP ──────────────────────────────────────────────────────────────
-export default function App() {
+export { SkeletonLoader };
+export default SkeletonLoader;
+
+// ─── PREVIEW APP (for development only — not imported anywhere in production) ──
+export function SkeletonPreviewApp() {
   const [activeTab, setActiveTab] = useState("weather");
   const [loaded, setLoaded] = useState(false);
   const [dark, setDark] = useState(false);
