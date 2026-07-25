@@ -39,7 +39,7 @@ except ImportError:
 
 load_dotenv()
 
-GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY"AQ.Ab8RN6IYZHinOVDyevmtubxzjKnkkiwVyg1GPq1u9E5EdnUp_Q"")
+GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY","")
 WEATHER_API_KEY  = os.getenv("WEATHER_API_KEY"dd68d5c20f166bad003b7a802fc31c67"")
 AGMARKNET_KEY    = os.getenv("AGMARKNET_KEY"579b464db66ec23bdd000001cdd3946e44ce4aad7209ff7b23ac571b"")
 MODEL_PATH       = os.getenv("MODEL_PATH", "./model/krishi_model.h5")
